@@ -1,0 +1,15 @@
+name: CEL18CQFD-G
+description: 18-Port 100GE Interface Card (FD-G, QSFP28)
+ports:
+  100GE:
+    count: 18
+    connector_type:
+      - QSFP28
+      - QSFP+
+breakouts:
+  - from: 100GE
+    to: 1x40GE
+  - from: 100GE
+    to: 4x25GE
+  - from: 100GE
+    to: 4x10GE

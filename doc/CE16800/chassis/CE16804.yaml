@@ -1,0 +1,11 @@
+name: CE16804
+lpu_slots: 4
+sfu_slots: 9
+mpu_slot: 2
+dimensions:
+    height_mm: 730.0
+    width_mm: 770.0
+    depth_mm: 1150.0
+    height_u: 9.8
+max_altitude_m: 5000.0
+max_power_w: 4664.0

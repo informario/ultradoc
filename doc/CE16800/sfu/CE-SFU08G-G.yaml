@@ -1,0 +1,10 @@
+name: CE-SFU08G-G
+description: CE16808 Switch Fabric Unit G
+
+restrictions:
+  CE16808:
+    available_slots: [3,4,5,6,7,8]
+
+features:
+  - hotswapping: True
+

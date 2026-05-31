@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dynamic Datasheet</title>
+    <!-- Use js-yaml for parsing YAML files directly in the browser -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background: #ffffff;
+            color: #202122;
+        }
+        h1 {
+            border-bottom: 1px solid #a2a9b1;
+            text-align: center;
+            padding-bottom: 10px;
+        }
+        #content {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .datasheet {
+            background: #fff;
+            padding: 20px;
+        }
+        .datasheet h2 {
+            font-family: 'Linux Libertine', Georgia, Times, serif;
+            margin-top: 0;
+            border-bottom: 1px solid #a2a9b1;
+            padding-bottom: 5px;
+        }
+        .data-content {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .yaml-data {
+            width: 100%;
+        }
+        .wiki-table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+        .wiki-table th, .wiki-table td {
+            border: 1px solid #a2a9b1;
+            padding: 6px 12px;
+        }
+        .wiki-table th {
+            background-color: #eaecf0;
+            font-weight: 600;
+            text-align: left;
+            width: 35%;
+        }
+        details {
+            margin-bottom: 10px;
+            border: 1px solid #a2a9b1;
+            background: #f8f9fa;
+        }
+        summary {
+            font-weight: bold;
+            cursor: pointer;
+            padding: 8px 12px;
+            background: #eaecf0;
+        }
+        details > div {
+            padding: 10px;
+            background: #fff;
+            border-top: 1px solid #a2a9b1;
+        }
+        .images-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 100%;
+            align-items: center;
+        }
+        .image-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border: 1px solid #eee;
+            padding: 10px;
+            border-radius: 6px;
+            background: #fff;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .image-box img {
+            max-width: 100%;
+            height: auto;
+            object-fit: contain;
+        }
+        .image-subtitle {
+            margin-top: 8px;
+            font-size: 0.9em;
+            color: #666;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Dynamic Datasheet</h1>
+    <div id="content">Loading data...</div>
+
+    <script>
+        let globalDataMap = {};
+        let folderTree = {};
+
+        async function getFiles(dirPrefix, owner, repo) {
+            if (window.location.hostname.includes('github.io')) {
+                const url = `https://api.github.com/repos/${owner}/${repo}/contents/${dirPrefix}`;
+                const res = await fetch(url);
+                if (!res.ok) return [];
+                const data = await res.json();
+                let files = [];
+                for (const item of data) {
+                    if (item.type === 'file') {
+                        files.push(item.path);
+                    } else if (item.type === 'dir') {
+                        const subFiles = await getFiles(item.path, owner, repo);
+                        files = files.concat(subFiles);
+                    }
+                }
+                return files;
+            } else {
+                // Local dev / web server using standard directory listing
+                try {
+                    const res = await fetch(dirPrefix);
+                    if (!res.ok) return [];
+                    const html = await res.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, 'text/html');
+                    let files = [];
+                    const links = Array.from(doc.querySelectorAll('a')).map(a => a.getAttribute('href') || a.innerText);
+                    for (let link of links) {
+                        if (link.startsWith('.') || link.startsWith('/') || link.startsWith('http')) continue;
+                        const path = dirPrefix.endsWith('/') ? dirPrefix + link : dirPrefix + '/' + link;
+
+                        if (link.endsWith('/') || !link.includes('.')) {
+                            const sub = await getFiles(path, owner, repo);
+                            files = files.concat(sub);
+                        } else {
+                            files.push(path);
+                        }
+                    }
+                    return files;
+                } catch (e) {
+                    return [];
+                }
+            }
+        }
+
+        async function loadData() {
+            try {
+                let rootFolderName = 'Datasheet';
+                const pathParts = window.location.pathname.split('/').filter(p => p && p !== 'index.html');
+                if (pathParts.length > 0) {
+                    rootFolderName = decodeURIComponent(pathParts[pathParts.length - 1]);
+                } else if (window.location.hostname) {
+                    rootFolderName = window.location.hostname.split('.')[0];
+                }
+                document.title = rootFolderName;
+                const h1 = document.querySelector('h1');
+                if (h1) h1.innerText = rootFolderName;
+
+                const owner = window.location.hostname.split('.')[0];
+                const parts = window.location.pathname.split('/').filter(p => p);
+                const repo = parts.length > 0 ? parts[0] : '';
+
+                let files = await getFiles('doc', owner, repo);
+
+                if (files.length === 0) {
+                    document.getElementById('content').innerHTML = `
+                        <p>Could not auto-read the directory. Please select the "doc" folder locally:</p>
+                        <input type="file" webkitdirectory directory multiple id="dirInput">
+                    `;
+                    document.getElementById('dirInput').addEventListener('change', async (e) => {
+                        const selectedFiles = Array.from(e.target.files);
+                        await processLocalFiles(selectedFiles);
+                    });
+                    return;
+                }
+
+                await processPaths(files, async (path) => {
+                    const res = await fetch(path);
+                    return res.ok ? await res.text() : null;
+                }, (path) => path);
+
+            } catch (err) {
+                document.getElementById('content').innerText = 'Error: ' + err.message;
+            }
+        }
+
+        async function processPaths(paths, getFileContent, getFileUrl) {
+            globalDataMap = {};
+            folderTree = {};
+
+            for (const path of paths) {
+                const parts = path.split('/');
+                const filename = parts.pop();
+                const folderPath = parts.join('/');
+
+                if (path.endsWith('.yaml')) {
+                    const content = await getFileContent(path);
+                    if (content) {
+                        const name = filename.replace('.yaml', '');
+                        if (!globalDataMap[name]) globalDataMap[name] = { yaml: null, images: [] };
+                        globalDataMap[name].yaml = jsyaml.load(content);
+
+                        if (!folderTree[folderPath]) folderTree[folderPath] = [];
+                        if (!folderTree[folderPath].includes(name)) folderTree[folderPath].push(name);
+                    }
+                } else if (path.endsWith('.png')) {
+                    const url = getFileUrl(path);
+
+                    const regex = /^(.+?)\.(.+?)\.png$/;
+                    const match = filename.match(regex);
+
+                    let baseName = filename.replace('.png', '');
+                    let subtitle = '';
+
+                    if (match) {
+                        baseName = match[1];
+                        subtitle = match[2];
+                    }
+
+                    if (!globalDataMap[baseName]) globalDataMap[baseName] = { yaml: null, images: [] };
+                    globalDataMap[baseName].images.push({ url, subtitle });
+
+                    if (!folderTree[folderPath]) folderTree[folderPath] = [];
+                    if (!folderTree[folderPath].includes(baseName)) folderTree[folderPath].push(baseName);
+                }
+            }
+
+            window.addEventListener('hashchange', handleRoute);
+            handleRoute();
+        }
+
+        async function processLocalFiles(files) {
+            const paths = files.map(f => f.webkitRelativePath);
+            await processPaths(paths, async (path) => {
+                const file = files.find(f => f.webkitRelativePath === path);
+                return await file.text();
+            }, (path) => {
+                const file = files.find(f => f.webkitRelativePath === path);
+                return URL.createObjectURL(file);
+            });
+        }
+
+        function getSummaryLabel(v, k, isArray) {
+            if (!isArray) return k;
+            if (typeof v === 'object' && v !== null) {
+                if (v.name) return v.name;
+                if (v.id) return v.id;
+                if (v.model) return v.model;
+                if (v.type) return v.type;
+                for (let key in v) {
+                    if (typeof v[key] === 'string' || typeof v[key] === 'number') {
+                        return v[key];
+                    }
+                }
+            }
+            return `Item ${parseInt(k) + 1}`;
+        }
+
+        function renderYamlObj(obj) {
+            if (typeof obj !== 'object' || obj === null) {
+                return document.createTextNode(obj);
+            }
+            const container = document.createElement('div');
+            const table = document.createElement('table');
+            table.className = 'wiki-table';
+            let hasPrimitive = false;
+
+            for (const [k, v] of Object.entries(obj)) {
+                const isArray = Array.isArray(obj);
+                if (typeof v === 'object' && v !== null) {
+                    const details = document.createElement('details');
+                    const summary = document.createElement('summary');
+                    summary.innerText = getSummaryLabel(v, k, isArray);
+                    details.appendChild(summary);
+                    const innerDiv = document.createElement('div');
+                    innerDiv.appendChild(renderYamlObj(v));
+                    details.appendChild(innerDiv);
+                    container.appendChild(details);
+                } else {
+                    hasPrimitive = true;
+                    const tr = document.createElement('tr');
+                    const th = document.createElement('th');
+                    th.innerText = isArray ? `Item ${parseInt(k) + 1}` : k;
+                    const td = document.createElement('td');
+
+                    if (typeof v === 'string') {
+                        const keys = Object.keys(globalDataMap).filter(key => key.length > 0).sort((a, b) => b.length - a.length);
+                        if (keys.length > 0) {
+                            const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                            const pattern = new RegExp('(' + keys.map(escapeRegExp).join('|') + ')', 'g');
+                            const parts = v.split(pattern);
+                            for (let p of parts) {
+                                if (p === '') continue;
+                                if (globalDataMap[p]) {
+                                    const a = document.createElement('a');
+                                    a.href = '#' + p;
+                                    a.innerText = p;
+                                    td.appendChild(a);
+                                } else {
+                                    td.appendChild(document.createTextNode(p));
+                                }
+                            }
+                        } else {
+                            td.appendChild(document.createTextNode(v));
+                        }
+                    } else {
+                        td.appendChild(document.createTextNode(v));
+                    }
+
+                    tr.appendChild(th);
+                    tr.appendChild(td);
+                    table.appendChild(tr);
+                }
+            }
+            if (hasPrimitive) {
+                container.insertBefore(table, container.firstChild);
+            }
+            return container;
+        }
+
+        function handleRoute() {
+            const hash = window.location.hash.substring(1);
+            if (hash && globalDataMap[hash]) {
+                renderPage(hash, globalDataMap[hash]);
+            } else {
+                renderIndex();
+            }
+        }
+
+        function renderIndex() {
+            const container = document.getElementById('content');
+            container.innerHTML = '';
+
+            const section = document.createElement('div');
+            section.className = 'datasheet';
+
+            const title = document.createElement('h2');
+            title.innerText = 'Index';
+            section.appendChild(title);
+
+            for (const [folder, names] of Object.entries(folderTree)) {
+                if (names.length === 0) continue;
+                const fTitle = document.createElement('h3');
+                fTitle.innerText = folder;
+                section.appendChild(fTitle);
+
+                const ul = document.createElement('ul');
+                for (const name of names) {
+                    const li = document.createElement('li');
+                    const a = document.createElement('a');
+                    a.href = '#' + name;
+                    a.innerText = name;
+                    li.appendChild(a);
+                    ul.appendChild(li);
+                }
+                section.appendChild(ul);
+            }
+            container.appendChild(section);
+        }
+
+        function renderPage(name, item) {
+            const container = document.getElementById('content');
+            container.innerHTML = '';
+
+            const backNav = document.createElement('div');
+            backNav.style.marginBottom = '15px';
+            backNav.innerHTML = '<a href="#">&larr; Back to Index</a>';
+            container.appendChild(backNav);
+
+            const section = document.createElement('div');
+            section.className = 'datasheet';
+
+            const title = document.createElement('h2');
+            title.innerText = name;
+            section.appendChild(title);
+
+            const dataContent = document.createElement('div');
+            dataContent.className = 'data-content';
+
+            if (item.images.length > 0) {
+                const imgsContainer = document.createElement('div');
+                imgsContainer.className = 'images-container';
+
+                for (const imgData of item.images) {
+                    const imgBox = document.createElement('div');
+                    imgBox.className = 'image-box';
+
+                    const imgElem = document.createElement('img');
+                    imgElem.src = imgData.url;
+                    imgBox.appendChild(imgElem);
+
+                    if (imgData.subtitle) {
+                        const subText = document.createElement('div');
+                        subText.className = 'image-subtitle';
+                        subText.innerText = imgData.subtitle;
+                        imgBox.appendChild(subText);
+                    }
+
+                    imgsContainer.appendChild(imgBox);
+                }
+                dataContent.appendChild(imgsContainer);
+            }
+
+            if (item.yaml) {
+                const yamlContainer = document.createElement('div');
+                yamlContainer.className = 'yaml-data';
+                yamlContainer.appendChild(renderYamlObj(item.yaml));
+                dataContent.appendChild(yamlContainer);
+            }
+
+            section.appendChild(dataContent);
+            container.appendChild(section);
+        }
+
+        loadData();
+    </script>
+</body>
+</html>

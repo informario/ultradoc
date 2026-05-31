@@ -1,0 +1,18 @@
+name: CE-MPUD-HALF
+description: CE16800 Main Processing Unit D (half-width)
+
+restrictions:
+  CE16804:
+    available_slots: [5,6]
+  CE16808:
+    available_slots: [9,10]
+
+features:
+  hotswapping: True
+
+technical:
+  max_power_w: 82.0
+  memory_gb: 16
+  storage_gb: 4
+  cpu_cores: 16
+  cpu_clk_mhz: 1850
